@@ -1,0 +1,42 @@
+# Core Deep Learning
+torch
+torchaudio
+torchvision
+
+# Transformers and NLP
+transformers
+accelerate
+sentencepiece
+protobuf
+
+# Speech Recognition
+openai-whisper
+faster-whisper
+
+# Text-to-Speech
+TTS
+# piper-tts
+
+# Audio Processing
+librosa
+soundfile
+pydub
+scipy
+numpy
+
+# Web Framework
+flask
+flask-cors
+flask-socketio
+python-socketio
+eventlet
+
+# Utilities
+python-dotenv
+tqdm
+pyyaml
+
+# Evaluation Metrics
+sacrebleu
+jiwer
+pesq
