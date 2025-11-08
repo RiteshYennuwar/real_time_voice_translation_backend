@@ -5,6 +5,7 @@ torchvision
 
 # Transformers and NLP
 transformers
+hf_xet
 accelerate
 sentencepiece
 protobuf
