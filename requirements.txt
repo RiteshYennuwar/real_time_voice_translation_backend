@@ -9,6 +9,7 @@ hf_xet
 accelerate
 sentencepiece
 protobuf
+sacremoses
 
 # Speech Recognition
 openai-whisper
