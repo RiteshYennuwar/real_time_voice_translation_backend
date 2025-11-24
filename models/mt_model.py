@@ -9,12 +9,6 @@ logger = logging.getLogger(__name__)
 
 class MTModel:
     def __init__(self, device: Optional[str] = None):
-        """
-        Initialize Machine Translation models for multi-language support
-        
-        Args:
-            device: 'cuda' or 'cpu' (auto-detected if None)
-        """
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         logger.info(f"Initializing MT models on {self.device}")
         
@@ -48,7 +42,6 @@ class MTModel:
                 self._load_model(src, tgt, model_name)
     
     def _load_model(self, src: str, tgt: str, model_name: str):
-        """Load a specific translation model"""
         key = f"{src}-{tgt}"
         
         if key not in self.models:
@@ -80,18 +73,6 @@ class MTModel:
         target_lang: str,
         max_length: int = 512
     ) -> Dict[str, any]:
-        """
-        Translate text from source to target language
-        
-        Args:
-            text: Input text to translate
-            source_lang: Source language code ('en', 'es', 'hi')
-            target_lang: Target language code ('en', 'es', 'hi')
-            max_length: Maximum translation length
-        
-        Returns:
-            dict: {'translated_text': str, 'source_lang': str, 'target_lang': str}
-        """
         if not text or not text.strip():
             return {
                 'translated_text': '',
@@ -138,7 +119,6 @@ class MTModel:
             }
     
     def _translate_direct(self, text: str, key: str, max_length: int) -> str:
-        """Perform direct translation"""
         tokenizer = self.tokenizers[key]
         model = self.models[key]
         
@@ -171,10 +151,6 @@ class MTModel:
         target_lang: str,
         max_length: int
     ) -> str:
-        """
-        Translate using English as pivot language
-        Example: Spanish -> English -> Hindi
-        """
         logger.info(f"Using pivot translation: {source_lang} -> en -> {target_lang}")
         
         # First translate to English
@@ -206,18 +182,6 @@ class MTModel:
         target_lang: str,
         max_length: int = 512
     ) -> List[Dict[str, any]]:
-        """
-        Translate multiple texts in batch
-        
-        Args:
-            texts: List of input texts
-            source_lang: Source language code
-            target_lang: Target language code
-            max_length: Maximum translation length
-        
-        Returns:
-            List of translation results
-        """
         results = []
         for text in texts:
             result = self.translate(text, source_lang, target_lang, max_length)
@@ -226,11 +190,9 @@ class MTModel:
         return results
     
     def get_supported_pairs(self) -> List[tuple]:
-        """Get list of supported language pairs"""
         return list(self.model_map.keys())
     
     def get_model_info(self) -> dict:
-        """Get model information"""
         return {
             'device': self.device,
             'supported_languages': ['en', 'es', 'hi'],

@@ -10,13 +10,6 @@ logger = logging.getLogger(__name__)
 
 class ASRModel:
     def __init__(self, model_size: str = "base", device: Optional[str] = None):
-        """
-        Initialize Whisper ASR model
-        
-        Args:
-            model_size: 'tiny', 'base', 'small', 'medium' (base recommended for 8GB VRAM)
-            device: 'cuda' or 'cpu' (auto-detected if None)
-        """
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         logger.info(f"Loading Whisper {model_size} model on {self.device}")
         
@@ -41,17 +34,6 @@ class ASRModel:
         source_language: str = "en",
         sample_rate: int = 16000
     ) -> dict:
-        """
-        Transcribe audio to text
-        
-        Args:
-            audio_data: Audio array (must be 16kHz mono)
-            source_language: Language code ('en', 'es', 'hi')
-            sample_rate: Sample rate (must be 16000)
-        
-        Returns:
-            dict: {'text': str, 'language': str, 'confidence': float}
-        """
         try:
             # Ensure audio is float32 and normalized
             if audio_data.dtype != np.float32:
@@ -91,17 +73,6 @@ class ASRModel:
         source_language: str = "en",
         chunk_duration: float = 3.0
     ) -> Generator[dict, None, None]:
-        """
-        Transcribe streaming audio chunks
-        
-        Args:
-            audio_chunks: Generator yielding audio chunks
-            source_language: Language code
-            chunk_duration: Duration of each chunk in seconds
-        
-        Yields:
-            dict: Transcription results
-        """
         buffer = np.array([], dtype=np.float32)
         chunk_size = int(16000 * chunk_duration)  # 3 seconds at 16kHz
         
@@ -123,15 +94,6 @@ class ASRModel:
             yield result
     
     def _calculate_confidence(self, result: dict) -> float:
-        """
-        Calculate confidence score from Whisper result
-        
-        Args:
-            result: Whisper transcription result
-        
-        Returns:
-            float: Confidence score [0, 1]
-        """
         # Whisper doesn't provide direct confidence, estimate from segments
         if 'segments' in result and result['segments']:
             confidences = []

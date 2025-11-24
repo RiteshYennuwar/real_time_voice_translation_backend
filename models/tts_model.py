@@ -1,8 +1,3 @@
-"""
-Text-to-Speech Module using Coqui TTS
-Supports English, Spanish, and Hindi with natural voices
-"""
-
 import torch
 import numpy as np
 from TTS.api import TTS
