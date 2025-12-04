@@ -1,11 +1,15 @@
 import numpy as np
 import time
+import sys
+import os
 from typing import Dict, Generator, Optional
 import logging
 from dataclasses import dataclass
 from collections import deque
 
-# Import your models (ensure these files are in the correct location)
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from models.asr_model import ASRModel
 from models.mt_model import MTModel
 from models.tts_model import TTSModel

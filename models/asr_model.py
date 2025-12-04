@@ -17,7 +17,7 @@ class ASRModel:
         self.model = whisper.load_model(model_size, device=self.device)
         
         if self.device == "cuda":
-            self.model = self.model.half()  # FP16 for faster inference
+            self.model = whisper.load_model(model_size, device=self.device)
         
         logger.info(f"ASR Model loaded successfully")
         

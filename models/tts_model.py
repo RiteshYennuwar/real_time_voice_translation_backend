@@ -3,7 +3,7 @@ import numpy as np
 from TTS.api import TTS
 from typing import Optional, Dict
 import logging
-import io
+import os
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -12,51 +12,125 @@ logger = logging.getLogger(__name__)
 class TTSModel:
     def __init__(self, device: Optional[str] = None):
         """
-        Initialize TTS models for multi-language support
-        
-        Args:
-            device: 'cuda' or 'cpu' (auto-detected if None)
+        Initialize TTS models with multilingual support using separate models per language
         """
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         logger.info(f"Initializing TTS models on {self.device}")
         
-        # Language-specific TTS models
         self.models = {}
         
-        # Model configurations for each language
+        # Use separate models for each language (simpler and more reliable)
         self.model_config = {
-            'en': 'tts_models/en/ljspeech/tacotron2-DDC',  # English
-            'es': 'tts_models/es/mai/tacotron2-DDC',       # Spanish
-            'hi': 'tts_models/hi/nsk/vits'                  # Hindi (VITS is lighter)
+            'en': 'tts_models/en/ljspeech/vits',
+            'es': 'tts_models/es/css10/vits',
+            # For Hindi, we'll use edge-tts (Microsoft neural voices)
         }
         
-        # Preload models
         self._preload_models()
-        
         logger.info("TTS Models initialized successfully")
     
     def _preload_models(self):
-        """Preload TTS models for all supported languages"""
-        for lang, model_name in self.model_config.items():
+        """Preload TTS models for each language"""
+        # Load English model
+        try:
+            logger.info("Loading English VITS model...")
+            self.models['en'] = TTS(model_name=self.model_config['en'], progress_bar=True)
+            self.models['en'].to(self.device)
+            logger.info("✓ English model loaded")
+        except Exception as e:
+            logger.error(f"Failed to load English model: {e}")
+            self._load_english_fallback()
+        
+        # Load Spanish model
+        try:
+            logger.info("Loading Spanish VITS model...")
+            self.models['es'] = TTS(model_name=self.model_config['es'], progress_bar=True)
+            self.models['es'].to(self.device)
+            logger.info("✓ Spanish model loaded")
+        except Exception as e:
+            logger.error(f"Failed to load Spanish model: {e}")
+        
+        # For Hindi, we'll use edge-tts (external service)
+        self.models['hi'] = None  # Will use edge-tts
+        logger.info("Hindi TTS will use edge-tts (Microsoft neural voices)")
+    
+    def _load_english_fallback(self):
+        """Load English-only model as fallback"""
+        try:
+            tts = TTS(model_name='tts_models/en/ljspeech/tacotron2-DDC', progress_bar=False)
+            tts.to(self.device)
+            self.models['en'] = tts
+            logger.info("✓ English fallback model loaded")
+        except Exception as e:
+            logger.error(f"Failed to load fallback model: {e}")
+    
+    def _synthesize_hindi_edge_tts(self, text: str) -> Dict[str, any]:
+        """Synthesize Hindi using edge-tts (Microsoft neural voices)"""
+        import asyncio
+        import tempfile
+        import soundfile as sf
+        
+        async def _generate():
             try:
-                logger.info(f"Loading TTS model for {lang}: {model_name}")
+                import edge_tts
                 
-                tts = TTS(model_name=model_name, progress_bar=False)
-                tts.to(self.device)
+                # Use Hindi voice
+                voice = "hi-IN-SwaraNeural"  # Female Hindi voice
+                # Alternative: "hi-IN-MadhurNeural" for male
                 
-                self.models[lang] = tts
-                logger.info(f"TTS model for {lang} loaded successfully")
+                communicate = edge_tts.Communicate(text, voice)
                 
+                with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as tmp:
+                    tmp_path = tmp.name
+                
+                await communicate.save(tmp_path)
+                
+                # Convert MP3 to WAV using pydub
+                from pydub import AudioSegment
+                audio_segment = AudioSegment.from_mp3(tmp_path)
+                
+                # Export as WAV
+                wav_path = tmp_path.replace('.mp3', '.wav')
+                audio_segment.export(wav_path, format='wav')
+                
+                # Read the audio
+                audio, sr = sf.read(wav_path)
+                
+                # Cleanup
+                os.unlink(tmp_path)
+                os.unlink(wav_path)
+                
+                return audio.astype(np.float32), sr
+                
+            except ImportError as ie:
+                logger.error(f"Missing dependency: {ie}. Run: pip install edge-tts pydub")
+                return None, None
             except Exception as e:
-                logger.error(f"Error loading TTS model for {lang}: {e}")
-                # Fallback to a simpler model if available
-                try:
-                    logger.info(f"Trying fallback model for {lang}")
-                    fallback = TTS(model_name="tts_models/en/ljspeech/tacotron2-DDC")
-                    fallback.to(self.device)
-                    self.models[lang] = fallback
-                except:
-                    logger.error(f"Failed to load fallback model for {lang}")
+                logger.error(f"edge-tts error: {e}")
+                return None, None
+        
+        # Run async function
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        audio, sr = loop.run_until_complete(_generate())
+        
+        if audio is not None:
+            return {
+                'audio': audio,
+                'sample_rate': sr,
+                'language': 'hi'
+            }
+        else:
+            return {
+                'audio': np.zeros(22050, dtype=np.float32),
+                'sample_rate': 22050,
+                'language': 'hi',
+                'error': 'Hindi TTS failed'
+            }
     
     def synthesize(
         self,
@@ -67,15 +141,6 @@ class TTSModel:
     ) -> Dict[str, any]:
         """
         Synthesize speech from text
-        
-        Args:
-            text: Input text to synthesize
-            language: Language code ('en', 'es', 'hi')
-            speaker: Speaker ID (if model supports multiple speakers)
-            speed: Speech speed (1.0 = normal)
-        
-        Returns:
-            dict: {'audio': np.ndarray, 'sample_rate': int, 'language': str}
         """
         if not text or not text.strip():
             return {
@@ -84,19 +149,25 @@ class TTSModel:
                 'language': language
             }
         
-        # Get model for language
-        if language not in self.models:
-            logger.warning(f"No model for language {language}, using English")
-            language = 'en'
-        
         try:
-            model = self.models[language]
+            logger.info(f"Synthesizing {language} text: {text[:50]}...")
             
-            # Generate speech
-            # Note: TTS.tts() returns audio as numpy array
-            audio = model.tts(text=text, speed=speed)
+            # Handle Hindi separately (edge-tts)
+            if language == 'hi':
+                return self._synthesize_hindi_edge_tts(text)
             
-            # Convert to numpy array if needed
+            # Get the model for this language
+            model = self.models.get(language)
+            if model is None:
+                logger.warning(f"No model for {language}, using English")
+                model = self.models.get('en')
+                if model is None:
+                    raise ValueError("No TTS models available")
+            
+            # Synthesize audio
+            audio = model.tts(text=text)
+            
+            # Convert to numpy array
             if not isinstance(audio, np.ndarray):
                 audio = np.array(audio)
             
@@ -105,20 +176,24 @@ class TTSModel:
                 audio = audio.astype(np.float32)
             
             # Normalize to [-1, 1]
-            if audio.max() > 1.0 or audio.min() < -1.0:
+            if len(audio) > 0 and (np.abs(audio).max() > 1.0):
                 audio = audio / np.abs(audio).max()
+            
+            # VITS models typically use 22050 Hz
+            sample_rate = 22050
+            
+            logger.info(f"✓ Generated {len(audio)/sample_rate:.2f}s of audio")
             
             return {
                 'audio': audio,
-                'sample_rate': model.synthesizer.output_sample_rate if hasattr(model, 'synthesizer') else 22050,
+                'sample_rate': sample_rate,
                 'language': language
             }
             
         except Exception as e:
             logger.error(f"TTS synthesis error for {language}: {e}")
-            # Return silence on error
             return {
-                'audio': np.zeros(22050, dtype=np.float32),  # 1 second silence
+                'audio': np.zeros(22050, dtype=np.float32),
                 'sample_rate': 22050,
                 'language': language,
                 'error': str(e)
@@ -129,23 +204,15 @@ class TTSModel:
         text: str,
         output_path: str,
         language: str = "en",
-        speed: float = 1.0
+        speed: float = 1.0,
+        speaker: Optional[str] = None
     ) -> bool:
-        """
-        Synthesize speech and save to file
-        
-        Args:
-            text: Input text
-            output_path: Output file path (.wav)
-            language: Language code
-            speed: Speech speed
-        
-        Returns:
-            bool: Success status
-        """
+        """Synthesize speech and save to file"""
         try:
-            model = self.models.get(language, self.models['en'])
-            model.tts_to_file(text=text, file_path=output_path, speed=speed)
+            result = self.synthesize(text, language, speaker, speed)
+            
+            import soundfile as sf
+            sf.write(output_path, result['audio'], result['sample_rate'])
             logger.info(f"Audio saved to {output_path}")
             return True
         except Exception as e:
@@ -158,91 +225,51 @@ class TTSModel:
         language: str = "en",
         chunk_size: int = 2048
     ):
-        """
-        Synthesize speech in streaming chunks (for real-time playback)
-        
-        Args:
-            text: Input text
-            language: Language code
-            chunk_size: Size of audio chunks
-        
-        Yields:
-            np.ndarray: Audio chunks
-        """
+        """Synthesize speech in streaming chunks"""
         result = self.synthesize(text, language)
         audio = result['audio']
         
-        # Yield audio in chunks
         for i in range(0, len(audio), chunk_size):
             chunk = audio[i:i + chunk_size]
             if len(chunk) > 0:
                 yield chunk
     
     def get_available_speakers(self, language: str = "en") -> list:
-        """
-        Get available speakers for a language
-        
-        Args:
-            language: Language code
-        
-        Returns:
-            list: Available speaker IDs
-        """
-        if language not in self.models:
-            return []
-        
-        try:
-            model = self.models[language]
-            if hasattr(model, 'speakers') and model.speakers:
-                return model.speakers
-        except:
-            pass
-        
-        return []
+        """Get available speakers"""
+        if language == 'hi':
+            return ['hi-IN-SwaraNeural', 'hi-IN-MadhurNeural']
+        return ['default']
     
     def estimate_duration(self, text: str, language: str = "en") -> float:
-        """
-        Estimate audio duration in seconds
-        
-        Args:
-            text: Input text
-            language: Language code
-        
-        Returns:
-            float: Estimated duration in seconds
-        """
-        # Rough estimation: ~150 words per minute for most languages
+        """Estimate audio duration in seconds"""
         word_count = len(text.split())
-        words_per_second = 2.5  # 150 WPM = 2.5 words/sec
-        
-        return word_count / words_per_second
+        return word_count / 2.5
     
     def get_model_info(self) -> dict:
         """Get model information"""
         return {
             'device': self.device,
-            'supported_languages': list(self.model_config.keys()),
-            'loaded_models': list(self.models.keys()),
+            'supported_languages': ['en', 'es', 'hi'],
+            'loaded_models': [k for k, v in self.models.items() if v is not None],
             'models': {
-                lang: self.model_config[lang] 
-                for lang in self.models.keys()
-            }
+                'en': 'VITS (LJSpeech)',
+                'es': 'VITS (CSS10)',
+                'hi': 'edge-tts (Microsoft Neural)'
+            },
+            'hindi_voices': ['hi-IN-SwaraNeural', 'hi-IN-MadhurNeural']
         }
 
 
-# Test function
 if __name__ == "__main__":
-    # Initialize TTS model
     tts = TTSModel()
     
-    # Test synthesis
     test_cases = [
         ("Hello, this is a test.", "en"),
         ("Hola, esto es una prueba.", "es"),
         ("नमस्ते, यह एक परीक्षण है।", "hi"),
     ]
     
-    print("TTS Model Test:\n")
+    print("\nTTS Model Test:\n")
     for text, lang in test_cases:
         print(f"Language: {lang.upper()}")
         print(f"Text: {text}")
@@ -251,7 +278,13 @@ if __name__ == "__main__":
         print(f"Audio shape: {result['audio'].shape}")
         print(f"Sample rate: {result['sample_rate']}")
         print(f"Duration: {len(result['audio']) / result['sample_rate']:.2f}s")
-        print(f"Estimated duration: {tts.estimate_duration(text, lang):.2f}s")
+        
+        if 'error' in result:
+            print(f"Error: {result['error']}")
+        else:
+            tts.synthesize_to_file(text, f"test_{lang}.wav", lang)
+            print(f"Saved to: test_{lang}.wav")
         print("-" * 50)
     
-    print(f"\nModel Info: {tts.get_model_info()}")
+    print("\nModel Info:")
+    print(tts.get_model_info())
