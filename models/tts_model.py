@@ -65,71 +65,53 @@ class TTSModel:
             logger.error(f"Failed to load fallback model: {e}")
     
     def _synthesize_hindi_edge_tts(self, text: str) -> Dict[str, any]:
-        """Synthesize Hindi using edge-tts (Microsoft neural voices)"""
-        import asyncio
+        """Synthesize Hindi using gTTS (Google Text-to-Speech) as primary method"""
         import tempfile
         import soundfile as sf
         
-        async def _generate():
-            try:
-                import edge_tts
-                
-                # Use Hindi voice
-                voice = "hi-IN-SwaraNeural"  # Female Hindi voice
-                # Alternative: "hi-IN-MadhurNeural" for male
-                
-                communicate = edge_tts.Communicate(text, voice)
-                
-                with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as tmp:
-                    tmp_path = tmp.name
-                
-                await communicate.save(tmp_path)
-                
-                # Convert MP3 to WAV using pydub
-                from pydub import AudioSegment
-                audio_segment = AudioSegment.from_mp3(tmp_path)
-                
-                # Export as WAV
-                wav_path = tmp_path.replace('.mp3', '.wav')
-                audio_segment.export(wav_path, format='wav')
-                
-                # Read the audio
-                audio, sr = sf.read(wav_path)
-                
-                # Cleanup
-                os.unlink(tmp_path)
-                os.unlink(wav_path)
-                
-                return audio.astype(np.float32), sr
-                
-            except ImportError as ie:
-                logger.error(f"Missing dependency: {ie}. Run: pip install edge-tts pydub")
-                return None, None
-            except Exception as e:
-                logger.error(f"edge-tts error: {e}")
-                return None, None
-        
-        # Run async function
         try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        
-        audio, sr = loop.run_until_complete(_generate())
-        
-        if audio is not None:
+            from gtts import gTTS
+            from pydub import AudioSegment
+            
+            # Use gTTS for Hindi
+            tts = gTTS(text=text, lang='hi', slow=False)
+            
+            with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as tmp:
+                tmp_path = tmp.name
+            
+            tts.save(tmp_path)
+            
+            # Convert MP3 to WAV using pydub
+            audio_segment = AudioSegment.from_mp3(tmp_path)
+            
+            # Set to mono and resample to 22050 Hz for consistency
+            audio_segment = audio_segment.set_channels(1).set_frame_rate(22050)
+            
+            # Export as WAV
+            wav_path = tmp_path.replace('.mp3', '.wav')
+            audio_segment.export(wav_path, format='wav')
+            
+            # Read the audio
+            audio, sr = sf.read(wav_path)
+            
+            # Cleanup
+            os.unlink(tmp_path)
+            os.unlink(wav_path)
+            
             return {
-                'audio': audio,
+                'audio': audio.astype(np.float32),
                 'sample_rate': sr,
                 'language': 'hi'
             }
-        else:
+            
+        except Exception as e:
+            logger.error(f"gTTS error: {e}")
+            # Return silent audio as fallback
             return {
                 'audio': np.zeros(22050, dtype=np.float32),
                 'sample_rate': 22050,
                 'language': 'hi',
-                'error': 'Hindi TTS failed'
+                'error': f'Hindi TTS failed: {e}'
             }
     
     def synthesize(
@@ -152,7 +134,7 @@ class TTSModel:
         try:
             logger.info(f"Synthesizing {language} text: {text[:50]}...")
             
-            # Handle Hindi separately (edge-tts)
+            # Handle Hindi separately (gTTS - Google Text-to-Speech)
             if language == 'hi':
                 return self._synthesize_hindi_edge_tts(text)
             
