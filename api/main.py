@@ -10,6 +10,8 @@ import traceback
 from datetime import datetime
 import os
 import sys
+import tempfile
+from pydub import AudioSegment
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -33,12 +35,15 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 
-# Enable CORS
+# Enable CORS - allow all localhost origins for development
 CORS(app, resources={
     r"/*": {
-        "origins": ["http://localhost:3000", "http://127.0.0.1:3000"],
-        "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type"]
+        "origins": "*",  # Allow all origins for development
+        "methods": ["GET", "POST", "OPTIONS", "PUT", "DELETE"],
+        "allow_headers": ["Content-Type", "Authorization", "Accept"],
+        "expose_headers": ["Content-Type"],
+        "supports_credentials": False,
+        "max_age": 3600
     }
 })
 
@@ -122,6 +127,7 @@ def health_check():
     Health check endpoint
     Returns system status and readiness
     """
+    logger.info(f"Health check request from {request.remote_addr}")
     return jsonify({
         'status': 'healthy' if app_state['initialized'] else 'initializing',
         'pipeline_ready': pipeline is not None,
@@ -245,11 +251,47 @@ def translate_audio():
         
         logger.info(f"Translation request: {source_lang} → {target_lang}")
         
-        # Load audio
+        # Load audio - handle various formats including WebM from browser
         audio_bytes = audio_file.read()
-        audio_data, sr = librosa.load(io.BytesIO(audio_bytes), sr=16000, mono=True)
+        filename = audio_file.filename or 'audio.webm'
         
-        logger.info(f"Audio loaded: {len(audio_data)} samples, {sr} Hz")
+        try:
+            # Try loading directly with librosa first (works for WAV, MP3, etc.)
+            audio_data, sr = librosa.load(io.BytesIO(audio_bytes), sr=16000, mono=True)
+        except Exception as e:
+            logger.info(f"Direct load failed ({e}), trying pydub conversion...")
+            
+            # Use pydub to convert from WebM/Opus to WAV
+            try:
+                # Determine format from filename
+                if filename.endswith('.webm'):
+                    audio_format = 'webm'
+                elif filename.endswith('.ogg'):
+                    audio_format = 'ogg'
+                elif filename.endswith('.mp3'):
+                    audio_format = 'mp3'
+                else:
+                    audio_format = 'webm'  # Default for browser recordings
+                
+                # Convert using pydub
+                audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes), format=audio_format)
+                
+                # Convert to mono and set sample rate
+                audio_segment = audio_segment.set_channels(1).set_frame_rate(16000)
+                
+                # Export to WAV in memory
+                wav_buffer = io.BytesIO()
+                audio_segment.export(wav_buffer, format='wav')
+                wav_buffer.seek(0)
+                
+                # Now load with librosa
+                audio_data, sr = librosa.load(wav_buffer, sr=16000, mono=True)
+                
+            except Exception as conv_error:
+                logger.error(f"Audio conversion failed: {conv_error}")
+                raise ValueError(f"Could not process audio file. Format: {filename}. Error: {conv_error}")
+        
+        logger.info(f"Audio loaded: {len(audio_data)} samples, {sr} Hz, duration: {len(audio_data)/sr:.2f}s")
         
         # Translate
         result = pipeline.translate(audio_data, source_lang, target_lang, sr)
@@ -511,7 +553,7 @@ if __name__ == '__main__':
     
     # Run Flask server
     port = int(os.getenv('PORT', 5000))
-    debug = os.getenv('FLASK_DEBUG', 'True').lower() == 'true'
+    debug = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'  # Changed default to False
     
     logger.info(f"\nServer Configuration:")
     logger.info(f"  - Port: {port}")
@@ -524,5 +566,6 @@ if __name__ == '__main__':
         host='0.0.0.0',
         port=port,
         debug=debug,
-        threaded=True
+        threaded=True,
+        use_reloader=False  # Disable reloader to avoid threading issues
     )
