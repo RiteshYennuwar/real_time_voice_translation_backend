@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
+from flask_socketio import SocketIO, emit
 import numpy as np
 import base64
 import io
@@ -12,6 +13,7 @@ import os
 import sys
 import tempfile
 from pydub import AudioSegment
+import threading
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -46,6 +48,10 @@ CORS(app, resources={
         "max_age": 3600
     }
 })
+
+# Initialize Socket.io with CORS support
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', 
+                    max_http_buffer_size=10000000, ping_timeout=60, ping_interval=25)
 
 # Global pipeline instance
 pipeline = None
@@ -542,6 +548,179 @@ def internal_error(error):
     }), 500
 
 
+# ============================================================
+# Socket.io Event Handlers for Real-Time Translation
+# ============================================================
+
+# Store audio buffers for each client session
+client_buffers = {}
+client_configs = {}
+
+@socketio.on('connect')
+def handle_connect():
+    """Handle client connection"""
+    logger.info(f"Client connected: {request.sid}")
+    client_buffers[request.sid] = []
+    emit('connected', {'status': 'ready', 'message': 'Connected to translation server'})
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Handle client disconnection"""
+    logger.info(f"Client disconnected: {request.sid}")
+    if request.sid in client_buffers:
+        del client_buffers[request.sid]
+    if request.sid in client_configs:
+        del client_configs[request.sid]
+
+@socketio.on('start_translation')
+def handle_start_translation(data):
+    """Initialize translation session"""
+    try:
+        source_lang = data.get('source_lang', 'en')
+        target_lang = data.get('target_lang', 'es')
+        
+        if not pipeline:
+            emit('error', {'error': 'Pipeline not initialized'})
+            return
+        
+        client_configs[request.sid] = {
+            'source_lang': source_lang,
+            'target_lang': target_lang,
+            'chunk_duration': 2.0,  # Process every 2 seconds of audio
+            'sample_rate': 16000
+        }
+        client_buffers[request.sid] = []
+        
+        logger.info(f"Translation session started for {request.sid}: {source_lang} -> {target_lang}")
+        emit('translation_started', {'source_lang': source_lang, 'target_lang': target_lang})
+        
+    except Exception as e:
+        logger.error(f"Error starting translation: {e}")
+        emit('error', {'error': str(e)})
+
+@socketio.on('audio_chunk')
+def handle_audio_chunk(data):
+    """Handle incoming audio chunk for real-time translation"""
+    try:
+        if request.sid not in client_configs:
+            emit('error', {'error': 'Translation not started. Call start_translation first.'})
+            return
+        
+        config = client_configs[request.sid]
+        
+        # Decode audio data
+        audio_bytes = base64.b64decode(data['audio'])
+        audio_format = data.get('format', 'webm')
+        
+        logger.info(f"📥 Received audio chunk: {len(audio_bytes)} bytes, format: {audio_format}")
+        
+        try:
+            if audio_format == 'raw_pcm':
+                # Raw PCM data (Int16)
+                sample_rate = data.get('sample_rate', 48000)
+                audio_array = np.frombuffer(audio_bytes, dtype=np.int16)
+                # Convert to float32 normalized to [-1, 1]
+                audio_chunk = audio_array.astype(np.float32) / 32768.0
+                
+                logger.info(f"🎵 PCM decoded: {len(audio_chunk)} samples at {sample_rate}Hz ({len(audio_chunk)/sample_rate:.2f}s)")
+                
+                # Resample to 16kHz if needed
+                if sample_rate != 16000:
+                    import scipy.signal
+                    num_samples = int(len(audio_chunk) * 16000 / sample_rate)
+                    audio_chunk = scipy.signal.resample(audio_chunk, num_samples)
+                    logger.info(f"♻️ Resampled to 16kHz: {len(audio_chunk)} samples")
+                
+            else:
+                # WebM/other format
+                audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes), format=audio_format)
+                audio_segment = audio_segment.set_channels(1).set_frame_rate(config['sample_rate'])
+                
+                # Export to WAV
+                wav_buffer = io.BytesIO()
+                audio_segment.export(wav_buffer, format='wav')
+                wav_buffer.seek(0)
+                
+                # Load with librosa
+                audio_chunk, sr = librosa.load(wav_buffer, sr=config['sample_rate'], mono=True)
+            
+            # Process immediately (each chunk is a complete audio segment)
+            if len(audio_chunk) > 1600:  # At least 0.1 seconds
+                logger.info(f"✅ Processing audio chunk ({len(audio_chunk)} samples)...")
+                # Translate in background thread to avoid blocking
+                threading.Thread(target=process_and_emit_translation, 
+                               args=(request.sid, audio_chunk, config, False)).start()
+            else:
+                logger.debug(f"⏭️ Skipping short audio chunk: {len(audio_chunk)} samples")
+        
+        except Exception as decode_error:
+            # If decoding fails, it might be an incomplete chunk - skip it
+            logger.warning(f"⚠️ Skipping invalid audio chunk: {str(decode_error)[:100]}")
+            
+    except Exception as e:
+        logger.error(f"❌ Error processing audio chunk: {e}")
+        logger.error(traceback.format_exc())
+        emit('error', {'error': str(e)})
+
+@socketio.on('stop_translation')
+def handle_stop_translation():
+    """Stop translation and process any remaining audio"""
+    try:
+        if request.sid in client_buffers and len(client_buffers[request.sid]) > 0:
+            # Process any remaining audio
+            config = client_configs[request.sid]
+            audio_data = np.array(client_buffers[request.sid])
+            client_buffers[request.sid] = []
+            
+            threading.Thread(target=process_and_emit_translation, 
+                           args=(request.sid, audio_data, config, True)).start()
+        
+        logger.info(f"Translation stopped for {request.sid}")
+        emit('translation_stopped', {'message': 'Translation session ended'})
+        
+    except Exception as e:
+        logger.error(f"Error stopping translation: {e}")
+        emit('error', {'error': str(e)})
+
+def process_and_emit_translation(session_id, audio_data, config, is_final=False):
+    """Process audio and emit translation result (runs in background thread)"""
+    try:
+        if len(audio_data) < 1600:  # Less than 0.1 seconds
+            return
+        
+        # Translate
+        result = pipeline.translate(
+            audio_data,
+            config['source_lang'],
+            config['target_lang'],
+            config['sample_rate']
+        )
+        
+        # Convert audio to base64
+        audio_buffer = io.BytesIO()
+        sf.write(audio_buffer, result.audio, result.sample_rate, format='WAV')
+        audio_buffer.seek(0)
+        audio_base64 = base64.b64encode(audio_buffer.read()).decode('utf-8')
+        
+        # Emit result to client
+        socketio.emit('translation_result', {
+            'original_text': result.original_text,
+            'translated_text': result.translated_text,
+            'audio_base64': audio_base64,
+            'sample_rate': result.sample_rate,
+            'latency_ms': result.latency_ms,
+            'confidence': result.asr_confidence,
+            'is_final': is_final,
+            'timestamp': datetime.now().isoformat()
+        }, room=session_id)
+        
+        logger.info(f"Streamed translation ({config['source_lang']}->{config['target_lang']}): '{result.original_text}' -> '{result.translated_text}' ({result.latency_ms:.0f}ms)")
+        
+    except Exception as e:
+        logger.error(f"Error in background translation: {e}")
+        logger.error(traceback.format_exc())
+        socketio.emit('error', {'error': str(e)}, room=session_id)
+
 
 if __name__ == '__main__':
     # Initialize pipeline before starting server
@@ -559,13 +738,16 @@ if __name__ == '__main__':
     logger.info(f"  - Port: {port}")
     logger.info(f"  - Debug: {debug}")
     logger.info(f"  - Host: 0.0.0.0")
+    logger.info(f"  - WebSocket: Enabled")
     logger.info(f"\nServer starting at http://localhost:{port}")
     logger.info("Press CTRL+C to quit\n")
     
-    app.run(
+    # Use socketio.run instead of app.run for WebSocket support
+    socketio.run(
+        app,
         host='0.0.0.0',
         port=port,
         debug=debug,
-        threaded=True,
-        use_reloader=False  # Disable reloader to avoid threading issues
+        use_reloader=False,
+        allow_unsafe_werkzeug=True  # For development only
     )
