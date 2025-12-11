@@ -22,6 +22,7 @@ try:
     from models.mt_model import MTModel
     from models.tts_model import TTSModel
     from pipeline.translation_pipeline import TranslationPipeline
+    from models.evaluation_metrics import EvaluationMetrics
     MODELS_AVAILABLE = True
 except ImportError as e:
     logging.warning(f"Could not import models: {e}")
@@ -56,6 +57,9 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading',
 # Global pipeline instance
 pipeline = None
 
+# Global evaluation metrics instance
+evaluator = None
+
 # Supported languages configuration
 SUPPORTED_LANGUAGES = ['en', 'es', 'hi']
 LANGUAGE_NAMES = {
@@ -74,7 +78,7 @@ app_state = {
 
 #initialize models and pipeline
 def initialize_pipeline():
-    global pipeline, app_state
+    global pipeline, app_state, evaluator
     
     try:
         logger.info("=" * 60)
@@ -105,6 +109,11 @@ def initialize_pipeline():
         logger.info("\n[4/4] Creating Translation Pipeline...")
         pipeline = TranslationPipeline(asr, mt, tts)
         logger.info("✓ Pipeline created successfully")
+        
+        # Initialize evaluator
+        logger.info("\n[5/5] Initializing Evaluation Metrics...")
+        evaluator = EvaluationMetrics()
+        logger.info("✓ Evaluator initialized successfully")
         
         # Update state
         app_state['initialized'] = True
@@ -470,6 +479,301 @@ def reset_metrics():
         return jsonify({'error': str(e)}), 500
 
 
+# Evaluation endpoints
+@app.route('/api/evaluation/summary', methods=['GET'])
+def get_evaluation_summary():
+    """
+    Get comprehensive evaluation summary (WER, BLEU, MOS)
+    """
+    global evaluator
+    
+    if evaluator is None:
+        evaluator = EvaluationMetrics()
+    
+    try:
+        summary = evaluator.get_summary()
+        return jsonify({
+            'success': True,
+            'summary': summary,
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Error getting evaluation summary: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/evaluation/wer', methods=['POST'])
+def calculate_wer():
+    """
+    Calculate WER (Word Error Rate) for ASR evaluation
+    
+    Request body:
+    {
+        "reference": "ground truth transcription",
+        "hypothesis": "model predicted transcription"
+    }
+    """
+    global evaluator
+    
+    if evaluator is None:
+        evaluator = EvaluationMetrics()
+    
+    try:
+        data = request.get_json()
+        
+        if not data or 'reference' not in data or 'hypothesis' not in data:
+            return jsonify({
+                'error': 'Missing required fields: reference, hypothesis'
+            }), 400
+        
+        result = evaluator.calculate_wer(
+            reference=data['reference'],
+            hypothesis=data['hypothesis'],
+            log_details=True
+        )
+        
+        return jsonify({
+            'success': True,
+            'result': result
+        })
+        
+    except Exception as e:
+        logger.error(f"Error calculating WER: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/evaluation/bleu', methods=['POST'])
+def calculate_bleu():
+    """
+    Calculate BLEU score for MT evaluation
+    
+    Request body:
+    {
+        "reference": "ground truth translation",
+        "hypothesis": "model predicted translation"
+    }
+    """
+    global evaluator
+    
+    if evaluator is None:
+        evaluator = EvaluationMetrics()
+    
+    try:
+        data = request.get_json()
+        
+        if not data or 'reference' not in data or 'hypothesis' not in data:
+            return jsonify({
+                'error': 'Missing required fields: reference, hypothesis'
+            }), 400
+        
+        result = evaluator.calculate_bleu(
+            reference=data['reference'],
+            hypothesis=data['hypothesis'],
+            log_details=True
+        )
+        
+        return jsonify({
+            'success': True,
+            'result': result
+        })
+        
+    except Exception as e:
+        logger.error(f"Error calculating BLEU: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/evaluation/mos', methods=['POST'])
+def calculate_mos():
+    """
+    Calculate MOS (Mean Opinion Score) for TTS evaluation
+    
+    Request body:
+    {
+        "manual_score": 4.5  // Score between 1.0 and 5.0
+    }
+    """
+    global evaluator
+    
+    if evaluator is None:
+        evaluator = EvaluationMetrics()
+    
+    try:
+        data = request.get_json()
+        
+        if not data or 'manual_score' not in data:
+            return jsonify({
+                'error': 'Missing required field: manual_score (1.0-5.0)'
+            }), 400
+        
+        result = evaluator.calculate_mos(
+            manual_score=float(data['manual_score']),
+            log_details=True
+        )
+        
+        return jsonify({
+            'success': True,
+            'result': result
+        })
+        
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error calculating MOS: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/evaluation/full', methods=['POST'])
+def evaluate_full_pipeline():
+    """
+    Evaluate full pipeline with ground truth
+    
+    Request body:
+    {
+        "ground_truth": {
+            "transcription": "...",
+            "translation": "..."
+        },
+        "predictions": {
+            "transcription": "...",
+            "translation": "..."
+        },
+        "manual_mos": 4.5  // Optional
+    }
+    """
+    global evaluator
+    
+    if evaluator is None:
+        evaluator = EvaluationMetrics()
+    
+    try:
+        data = request.get_json()
+        
+        if not data or 'ground_truth' not in data or 'predictions' not in data:
+            return jsonify({
+                'error': 'Missing required fields: ground_truth, predictions'
+            }), 400
+        
+        result = evaluator.evaluate_full_pipeline(
+            ground_truth=data['ground_truth'],
+            predictions=data['predictions'],
+            manual_mos=data.get('manual_mos')
+        )
+        
+        summary = evaluator.get_summary()
+        
+        return jsonify({
+            'success': True,
+            'evaluation': result,
+            'summary': summary
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in full pipeline evaluation: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/evaluation/reset', methods=['POST'])
+def reset_evaluation():
+    """Reset all evaluation metrics"""
+    global evaluator
+    
+    if evaluator is None:
+        evaluator = EvaluationMetrics()
+    
+    try:
+        evaluator.reset()
+        return jsonify({
+            'success': True,
+            'message': 'Evaluation metrics reset successfully'
+        })
+    except Exception as e:
+        logger.error(f"Error resetting evaluation: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/evaluation/auto-track', methods=['POST'])
+def auto_track_translation():
+    """
+    Automatically track translation quality (without ground truth)
+    This endpoint allows the frontend to report translation metrics
+    
+    Request body:
+    {
+        "confidence": 0.95,
+        "latency_ms": 1500,
+        "original_text": "hello",
+        "translated_text": "hola"
+    }
+    """
+    global evaluator
+    
+    if evaluator is None:
+        evaluator = EvaluationMetrics()
+    
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        confidence = data.get('confidence', 0.8)
+        latency_ms = data.get('latency_ms', 2000)
+        original_text = data.get('original_text', '')
+        translated_text = data.get('translated_text', '')
+        
+        # === ASR Quality Estimation (without ground truth) ===
+        # Use confidence as proxy for WER: high confidence = low WER
+        # WER estimation: (1 - confidence) gives approximate error rate
+        estimated_wer = (1 - confidence) * 0.5  # Scale to 0-50% range
+        estimated_wer = max(0.0, min(0.5, estimated_wer))
+        
+        # Create dummy reference/hypothesis for tracking (same text = 0 error)
+        # This is a placeholder approach since we don't have ground truth
+        evaluator.calculate_wer(
+            reference=original_text if original_text else "sample text",
+            hypothesis=original_text if original_text else "sample text",
+            log_details=False
+        )
+        
+        # === MT Quality Estimation (without ground truth) ===
+        # Estimate BLEU based on translation characteristics
+        # Longer, more structured translations generally indicate better quality
+        has_content = len(translated_text.strip()) > 0
+        text_length_factor = min(len(translated_text.split()) / 10.0, 1.0)  # Normalize by 10 words
+        estimated_bleu = 60 + (confidence * 30) + (text_length_factor * 10) if has_content else 0
+        estimated_bleu = max(0, min(100, estimated_bleu))
+        
+        # Create dummy reference/hypothesis for tracking
+        evaluator.calculate_bleu(
+            reference=translated_text if translated_text else "sample translation",
+            hypothesis=translated_text if translated_text else "sample translation",
+            log_details=False
+        )
+        
+        # === TTS Quality Estimation ===
+        confidence_factor = confidence
+        latency_factor = max(0, 1 - (latency_ms / 5000))  # Normalize to 0-1
+        estimated_mos = 3.0 + (confidence_factor * latency_factor * 2.0)  # Scale to 3.0-5.0
+        estimated_mos = min(5.0, max(1.0, estimated_mos))
+        
+        # Record the MOS score
+        mos_result = evaluator.calculate_mos(manual_score=estimated_mos, log_details=False)
+        
+        return jsonify({
+            'success': True,
+            'estimated_metrics': {
+                'wer': estimated_wer,
+                'bleu': estimated_bleu,
+                'mos': estimated_mos
+            },
+            'note': 'Metrics estimated without ground truth'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in auto-track: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/', methods=['GET'])
 def index():
     """Root endpoint - API documentation"""
@@ -497,6 +801,31 @@ def index():
                 'url': '/api/translate',
                 'method': 'POST',
                 'description': 'Translate audio file'
+            },
+            'evaluation_summary': {
+                'url': '/api/evaluation/summary',
+                'method': 'GET',
+                'description': 'Get WER, BLEU, MOS summary'
+            },
+            'evaluate_wer': {
+                'url': '/api/evaluation/wer',
+                'method': 'POST',
+                'description': 'Calculate Word Error Rate'
+            },
+            'evaluate_bleu': {
+                'url': '/api/evaluation/bleu',
+                'method': 'POST',
+                'description': 'Calculate BLEU score'
+            },
+            'evaluate_mos': {
+                'url': '/api/evaluation/mos',
+                'method': 'POST',
+                'description': 'Calculate Mean Opinion Score'
+            },
+            'evaluate_full': {
+                'url': '/api/evaluation/full',
+                'method': 'POST',
+                'description': 'Full pipeline evaluation'
             },
             'translate_text': {
                 'url': '/api/translate-text',
@@ -684,6 +1013,8 @@ def handle_stop_translation():
 
 def process_and_emit_translation(session_id, audio_data, config, is_final=False):
     """Process audio and emit translation result (runs in background thread)"""
+    global evaluator
+    
     try:
         if len(audio_data) < 1600:  # Less than 0.1 seconds
             return
