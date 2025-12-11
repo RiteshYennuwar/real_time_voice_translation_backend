@@ -121,7 +121,7 @@ class ASRModel:
 # Test function
 if __name__ == "__main__":
     # Initialize model
-    asr = ASRModel(model_size="base")
+    asr = ASRModel(model_size="medium")
     
     # Test with dummy audio (1 second of silence)
     test_audio = np.zeros(16000, dtype=np.float32)
