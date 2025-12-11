@@ -42,3 +42,4 @@ pyyaml
 sacrebleu
 jiwer
 pesq
+rapidfuzz
