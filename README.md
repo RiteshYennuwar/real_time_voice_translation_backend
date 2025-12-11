@@ -23,7 +23,7 @@ Backend API server for the real-time voice translation system. Supports speech r
 ### 1. Clone the Repository
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/RiteshYennuwar/real_time_voice_translation_backend.git
 cd real_time_voice_translation_backend
 ```
 
@@ -246,27 +246,3 @@ socketio.run(app, host='0.0.0.0', port=5001, debug=True)
 - Install CUDA-enabled PyTorch
 - Set `device='cuda'` in model files
 - Increase batch sizes for better throughput
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests: `python test_models.py && python test_pipeline.py`
-5. Submit a pull request
-
-## License
-
-MIT License - See LICENSE file for details
-
-## Support
-
-For issues, questions, or contributions:
-- Open an issue on GitHub
-- Check documentation at `/docs`
-- Review API examples in `test_evaluation_api.html`
-
-## Version
-
-**Current Version**: 1.0.0
-**Last Updated**: December 2025
