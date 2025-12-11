@@ -20,7 +20,7 @@ Backend API server for the real-time voice translation system. Supports speech r
 
 ## Installation
 
-### IMPORTANT NOTE PLEASE MAKE SURE YOU HAVE PYTHNO VERSION 3.10 OR 3.11 BEFORE RUNNING THIS PROJECT, THIS PROJECT WILL NOT RUN ON PYTHON 3.12 OR HIGHER VERSIONS
+# IMPORTANT NOTE PLEASE MAKE SURE YOU HAVE PYTHNO VERSION 3.10 OR 3.11 BEFORE RUNNING THIS PROJECT, THIS PROJECT WILL NOT RUN ON PYTHON 3.12 OR HIGHER VERSIONS
 
 ### 1. Clone the Repository
 
@@ -93,7 +93,7 @@ python main.py
 The server will start on `http://localhost:5000`
 
 
-### AT THIS POINT PLEASE VISIT https://github.com/RiteshYennuwar/real_time_voice_translation_frontend and install the frontend
+# AT THIS POINT PLEASE VISIT https://github.com/RiteshYennuwar/real_time_voice_translation_frontend and install the frontend
 
 ### Production Mode
 
